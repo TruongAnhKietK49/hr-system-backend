@@ -559,9 +559,9 @@ BEGIN
     THROW 50007, 'Only HR Staff can create HR requests.', 1;
   END
 
-  IF @RequestType <> 'CREATE_EMPLOYEE'
+  IF @RequestType NOT IN ('CREATE_EMPLOYEE', 'UPDATE_EMPLOYEE', 'DELETE_EMPLOYEE')
   BEGIN
-    THROW 50008, 'Unsupported request type.', 1;
+  THROW 50008, 'Unsupported request type.', 1;
   END
 
   INSERT INTO HR_Request (RequestType, Status, RequesterID, RequestPayload, CreatedAt)
@@ -936,5 +936,219 @@ BEGIN
     @Role AS Role,
     @DepartmentID AS DepartmentID,
     @FinalSalary AS FinalSalary;
+END
+GO
+
+CREATE OR ALTER PROCEDURE sp_Approval_ApproveUpdateEmployee
+  @RequestID INT,
+  @ApproverID VARCHAR(10)
+AS
+BEGIN
+  SET NOCOUNT ON;
+  SET XACT_ABORT ON;
+
+  DECLARE @ApproverRole NVARCHAR(50);
+  DECLARE @RequestPayload NVARCHAR(MAX);
+  DECLARE @EmployeeID VARCHAR(10);
+  DECLARE @FullName NVARCHAR(100);
+  DECLARE @Gender NVARCHAR(20);
+  DECLARE @DateOfBirth DATE;
+  DECLARE @PhoneNumber VARCHAR(20);
+  DECLARE @DepartmentID VARCHAR(10);
+  DECLARE @PositionID INT;
+  DECLARE @EmploymentStatus NVARCHAR(50);
+  DECLARE @IsActive BIT;
+
+  SELECT @ApproverRole = Role
+  FROM fn_RequesterContext(@ApproverID);
+
+  IF @ApproverRole <> 'Director'
+  BEGIN
+    THROW 50021, 'Only Director can approve update employee requests.', 1;
+  END
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM HR_Request
+    WHERE RequestID = @RequestID
+      AND Status = 'PENDING'
+      AND RequestType = 'UPDATE_EMPLOYEE'
+  )
+  BEGIN
+    THROW 50022, 'Update employee request not found or not pending.', 1;
+  END
+
+  SELECT @RequestPayload = RequestPayload
+  FROM HR_Request
+  WHERE RequestID = @RequestID;
+
+  SELECT
+    @EmployeeID = JSON_VALUE(@RequestPayload, '$.employeeId'),
+    @FullName = JSON_VALUE(@RequestPayload, '$.fullName'),
+    @Gender = JSON_VALUE(@RequestPayload, '$.gender'),
+    @DateOfBirth = TRY_CAST(JSON_VALUE(@RequestPayload, '$.dateOfBirth') AS DATE),
+    @PhoneNumber = JSON_VALUE(@RequestPayload, '$.phoneNumber'),
+    @DepartmentID = JSON_VALUE(@RequestPayload, '$.departmentId'),
+    @PositionID = TRY_CAST(JSON_VALUE(@RequestPayload, '$.positionId') AS INT),
+    @EmploymentStatus = JSON_VALUE(@RequestPayload, '$.employmentStatus'),
+    @IsActive =
+      CASE
+        WHEN JSON_VALUE(@RequestPayload, '$.isActive') IS NULL THEN NULL
+        WHEN JSON_VALUE(@RequestPayload, '$.isActive') IN ('true', '1') THEN 1
+        WHEN JSON_VALUE(@RequestPayload, '$.isActive') IN ('false', '0') THEN 0
+        ELSE NULL
+      END;
+
+  IF @EmployeeID IS NULL
+  BEGIN
+    THROW 50023, 'EmployeeID is required.', 1;
+  END
+
+  IF NOT EXISTS (SELECT 1 FROM Employee WHERE EmployeeID = @EmployeeID)
+  BEGIN
+    THROW 50024, 'Employee not found.', 1;
+  END
+
+  IF @DepartmentID IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM Department WHERE DepartmentID = @DepartmentID)
+  BEGIN
+    THROW 50025, 'Department not found.', 1;
+  END
+
+  IF @PositionID IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM Position WHERE PositionID = @PositionID)
+  BEGIN
+    THROW 50026, 'Position not found.', 1;
+  END
+
+  BEGIN TRANSACTION;
+
+  UPDATE Employee
+  SET
+    FullName = COALESCE(@FullName, FullName),
+    Gender = CASE
+      WHEN JSON_VALUE(@RequestPayload, '$.gender') IS NULL THEN Gender
+      ELSE @Gender
+    END,
+    DateOfBirth = COALESCE(@DateOfBirth, DateOfBirth),
+    PhoneNumber = COALESCE(@PhoneNumber, PhoneNumber),
+    DepartmentID = COALESCE(@DepartmentID, DepartmentID),
+    PositionID = COALESCE(@PositionID, PositionID),
+    EmploymentStatus = COALESCE(@EmploymentStatus, EmploymentStatus),
+    IsActive = COALESCE(@IsActive, IsActive)
+  WHERE EmployeeID = @EmployeeID;
+
+  IF @IsActive = 0
+  BEGIN
+    UPDATE Account
+    SET IsActive = 0,
+        AccountStatus = 'INACTIVE'
+    WHERE EmployeeID = @EmployeeID;
+  END
+
+  UPDATE HR_Request
+  SET Status = 'APPROVED',
+      ApproverID = @ApproverID,
+      ApprovedAt = GETDATE(),
+      RejectionReason = NULL
+  WHERE RequestID = @RequestID;
+
+  COMMIT TRANSACTION;
+
+  SELECT
+    @RequestID AS RequestID,
+    'UPDATE_EMPLOYEE' AS RequestType,
+    'APPROVED' AS Status,
+    @EmployeeID AS EmployeeID;
+END
+GO
+
+CREATE OR ALTER PROCEDURE sp_Approval_ApproveDeleteEmployee
+  @RequestID INT,
+  @ApproverID VARCHAR(10)
+AS
+BEGIN
+  SET NOCOUNT ON;
+  SET XACT_ABORT ON;
+
+  DECLARE @ApproverRole NVARCHAR(50);
+  DECLARE @RequestPayload NVARCHAR(MAX);
+  DECLARE @EmployeeID VARCHAR(10);
+
+  SELECT @ApproverRole = Role
+  FROM fn_RequesterContext(@ApproverID);
+
+  IF @ApproverRole <> 'Director'
+  BEGIN
+    THROW 50027, 'Only Director can approve delete employee requests.', 1;
+  END
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM HR_Request
+    WHERE RequestID = @RequestID
+      AND Status = 'PENDING'
+      AND RequestType = 'DELETE_EMPLOYEE'
+  )
+  BEGIN
+    THROW 50028, 'Delete employee request not found or not pending.', 1;
+  END
+
+  SELECT @RequestPayload = RequestPayload
+  FROM HR_Request
+  WHERE RequestID = @RequestID;
+
+  SELECT @EmployeeID = JSON_VALUE(@RequestPayload, '$.employeeId');
+
+  IF @EmployeeID IS NULL
+  BEGIN
+    THROW 50029, 'EmployeeID is required.', 1;
+  END
+
+  IF @EmployeeID = @ApproverID
+  BEGIN
+    THROW 50030, 'Director cannot delete own account.', 1;
+  END
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM Employee
+    WHERE EmployeeID = @EmployeeID
+      AND IsActive = 1
+  )
+  BEGIN
+    THROW 50031, 'Employee not found or already inactive.', 1;
+  END
+
+  BEGIN TRANSACTION;
+
+  UPDATE Department
+  SET ManagerID = NULL
+  WHERE ManagerID = @EmployeeID;
+
+  UPDATE Account
+  SET IsActive = 0,
+      AccountStatus = 'INACTIVE'
+  WHERE EmployeeID = @EmployeeID;
+
+  UPDATE Employee
+  SET IsActive = 0,
+      EmploymentStatus = 'TERMINATED'
+  WHERE EmployeeID = @EmployeeID;
+
+  UPDATE HR_Request
+  SET Status = 'APPROVED',
+      ApproverID = @ApproverID,
+      ApprovedAt = GETDATE(),
+      RejectionReason = NULL
+  WHERE RequestID = @RequestID;
+
+  COMMIT TRANSACTION;
+
+  SELECT
+    @RequestID AS RequestID,
+    'DELETE_EMPLOYEE' AS RequestType,
+    'APPROVED' AS Status,
+    @EmployeeID AS EmployeeID;
 END
 GO
