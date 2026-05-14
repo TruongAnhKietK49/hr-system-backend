@@ -133,12 +133,11 @@ Hoặc:
 npm start
 ```
 
-
 ## Lưu ý: Để xem doc API bằng swagger cần cài thư viện
 
 ```bash
  npm install swagger-ui-express swagger-jsdoc
- ```
+```
 
 ## Truy cập: localhost:3000/api-docs
 
@@ -173,14 +172,14 @@ Coverage hiện có:
 
 Mật khẩu của tất cả account seed: `123456`
 
-| Username | Role | EmployeeID | Department |
-| --- | --- | --- | --- |
-| `director01` | Director | `EM00001` | `D004` |
-| `hrmanager01` | HR Manager | `EM00002` | `D001` |
-| `hrstaff01` | HR Staff | `EM00003` | `D001` |
-| `finance01` | Finance Staff | `EM00004` | `D002` |
-| `manager01` | Manager | `EM00005` | `D003` |
-| `employee01` | Employee | `EM00006` | `D003` |
+| Username      | Role          | EmployeeID | Department |
+| ------------- | ------------- | ---------- | ---------- |
+| `director01`  | Director      | `EM00001`  | `D004`     |
+| `hrmanager01` | HR Manager    | `EM00002`  | `D001`     |
+| `hrstaff01`   | HR Staff      | `EM00003`  | `D001`     |
+| `finance01`   | Finance Staff | `EM00004`  | `D002`     |
+| `manager01`   | Manager       | `EM00005`  | `D003`     |
+| `employee01`  | Employee      | `EM00006`  | `D003`     |
 
 ## RBAC overview
 

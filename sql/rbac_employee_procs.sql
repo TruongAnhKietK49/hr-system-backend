@@ -782,6 +782,92 @@ BEGIN
 END
 GO
 
+CREATE OR ALTER PROCEDURE sp_Employee_UpdateOwnProfile
+  @RequesterEmployeeID VARCHAR(10),
+  @TargetEmployeeID VARCHAR(10),
+  @FullName NVARCHAR(100) = NULL,
+  @Gender NVARCHAR(20) = NULL,
+  @DateOfBirth DATE = NULL,
+  @PhoneNumber VARCHAR(20) = NULL
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  IF @RequesterEmployeeID <> @TargetEmployeeID
+  BEGIN
+    THROW 51024, 'User can update only own profile.', 1;
+  END
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM Employee
+    WHERE EmployeeID = @TargetEmployeeID
+      AND IsActive = 1
+  )
+  BEGIN
+    THROW 51025, 'Employee not found or inactive.', 1;
+  END
+
+  UPDATE Employee
+  SET FullName = COALESCE(@FullName, FullName),
+      Gender = COALESCE(@Gender, Gender),
+      DateOfBirth = COALESCE(@DateOfBirth, DateOfBirth),
+      PhoneNumber = COALESCE(@PhoneNumber, PhoneNumber)
+  WHERE EmployeeID = @TargetEmployeeID
+    AND IsActive = 1;
+
+  -- Trả về thông tin theo chính role hiện tại
+  DECLARE @RequesterRole NVARCHAR(50);
+
+  SELECT @RequesterRole = Role
+  FROM fn_RequesterContext(@RequesterEmployeeID);
+
+  IF @RequesterRole = 'Director'
+  BEGIN
+    EXEC sp_Employee_GetById_ForDirector
+      @RequesterEmployeeID = @RequesterEmployeeID,
+      @TargetEmployeeID = @TargetEmployeeID;
+    RETURN;
+  END
+
+  IF @RequesterRole = 'Finance Staff'
+  BEGIN
+    EXEC sp_Employee_GetById_ForFinance
+      @RequesterEmployeeID = @RequesterEmployeeID,
+      @TargetEmployeeID = @TargetEmployeeID;
+    RETURN;
+  END
+
+  IF @RequesterRole = 'Manager'
+  BEGIN
+    EXEC sp_Employee_GetById_ForManager
+      @RequesterEmployeeID = @RequesterEmployeeID,
+      @TargetEmployeeID = @TargetEmployeeID;
+    RETURN;
+  END
+
+  IF @RequesterRole = 'HR Manager'
+  BEGIN
+    EXEC sp_Employee_GetById_ForHRManager
+      @RequesterEmployeeID = @RequesterEmployeeID,
+      @TargetEmployeeID = @TargetEmployeeID;
+    RETURN;
+  END
+
+  IF @RequesterRole = 'HR Staff'
+  BEGIN
+    EXEC sp_Employee_GetById_ForHRStaff
+      @RequesterEmployeeID = @RequesterEmployeeID,
+      @TargetEmployeeID = @TargetEmployeeID;
+    RETURN;
+  END
+
+  EXEC sp_Employee_GetById_ForEmployee
+    @RequesterEmployeeID = @RequesterEmployeeID,
+    @TargetEmployeeID = @TargetEmployeeID;
+END
+GO
+
 /* =========================================================
    Salary Read - Director
    ========================================================= */
@@ -905,17 +991,47 @@ BEGIN
 
   SELECT
     e.EmployeeID,
+
+    -- Finance Staff can see full profile only for employees in the same department.
     CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.FullName ELSE NULL END AS FullName,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.Gender ELSE NULL END AS Gender,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.DateOfBirth ELSE NULL END AS DateOfBirth,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.PhoneNumber ELSE NULL END AS PhoneNumber,
     CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.DepartmentID ELSE NULL END AS DepartmentID,
     CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN d.DepartmentName ELSE NULL END AS DepartmentName,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.PositionID ELSE NULL END AS PositionID,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN p.PositionName ELSE NULL END AS PositionName,
+
+    -- Finance Staff can see full salary config only for employees in the same department.
+    CASE
+      WHEN e.DepartmentID = @RequesterDepartmentID
+      THEN CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.BaseSalaryEncrypted))
+      ELSE NULL
+    END AS BaseSalary,
+
+    CASE
+      WHEN e.DepartmentID = @RequesterDepartmentID
+      THEN CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.SalaryCoefficientEncrypted))
+      ELSE NULL
+    END AS SalaryCoefficient,
+
+    CASE
+      WHEN e.DepartmentID = @RequesterDepartmentID
+      THEN CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.PositionCoefficientEncrypted))
+      ELSE NULL
+    END AS PositionCoefficient,
+
+    -- Finance Staff can see these fields for all employees.
     CONVERT(NVARCHAR(50), DECRYPTBYKEY(e.TaxIDEncrypted)) AS TaxID,
     CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.AllowanceEncrypted)) AS Allowance,
     CONVERT(NVARCHAR(50), DECRYPTBYKEY(res.FinalSalaryEncrypted)) AS FinalSalary,
+
     cfg.FormulaVersion,
     cfg.UpdatedAt AS SalaryUpdatedAt,
     res.CalculatedAt AS SalaryCalculatedAt
   FROM Employee e
   INNER JOIN Department d ON d.DepartmentID = e.DepartmentID
+  INNER JOIN Position p ON p.PositionID = e.PositionID
   LEFT JOIN EmployeeSalaryConfig cfg ON cfg.EmployeeID = e.EmployeeID
   LEFT JOIN EmployeeSalaryResult res ON res.EmployeeID = e.EmployeeID
   WHERE e.IsActive = 1
@@ -952,17 +1068,47 @@ BEGIN
 
   SELECT
     e.EmployeeID,
+
+    -- Finance Staff can see full profile only for employees in the same department.
     CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.FullName ELSE NULL END AS FullName,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.Gender ELSE NULL END AS Gender,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.DateOfBirth ELSE NULL END AS DateOfBirth,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.PhoneNumber ELSE NULL END AS PhoneNumber,
     CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.DepartmentID ELSE NULL END AS DepartmentID,
     CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN d.DepartmentName ELSE NULL END AS DepartmentName,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN e.PositionID ELSE NULL END AS PositionID,
+    CASE WHEN e.DepartmentID = @RequesterDepartmentID THEN p.PositionName ELSE NULL END AS PositionName,
+
+    -- Finance Staff can see full salary config only for employees in the same department.
+    CASE
+      WHEN e.DepartmentID = @RequesterDepartmentID
+      THEN CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.BaseSalaryEncrypted))
+      ELSE NULL
+    END AS BaseSalary,
+
+    CASE
+      WHEN e.DepartmentID = @RequesterDepartmentID
+      THEN CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.SalaryCoefficientEncrypted))
+      ELSE NULL
+    END AS SalaryCoefficient,
+
+    CASE
+      WHEN e.DepartmentID = @RequesterDepartmentID
+      THEN CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.PositionCoefficientEncrypted))
+      ELSE NULL
+    END AS PositionCoefficient,
+
+    -- Finance Staff can see these fields for all employees.
     CONVERT(NVARCHAR(50), DECRYPTBYKEY(e.TaxIDEncrypted)) AS TaxID,
     CONVERT(NVARCHAR(50), DECRYPTBYKEY(cfg.AllowanceEncrypted)) AS Allowance,
     CONVERT(NVARCHAR(50), DECRYPTBYKEY(res.FinalSalaryEncrypted)) AS FinalSalary,
+
     cfg.FormulaVersion,
     cfg.UpdatedAt AS SalaryUpdatedAt,
     res.CalculatedAt AS SalaryCalculatedAt
   FROM Employee e
   INNER JOIN Department d ON d.DepartmentID = e.DepartmentID
+  INNER JOIN Position p ON p.PositionID = e.PositionID
   LEFT JOIN EmployeeSalaryConfig cfg ON cfg.EmployeeID = e.EmployeeID
   LEFT JOIN EmployeeSalaryResult res ON res.EmployeeID = e.EmployeeID
   WHERE e.IsActive = 1
@@ -1074,9 +1220,11 @@ GRANT EXECUTE ON OBJECT::sp_Department_List TO PUBLIC;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForEmployee TO rl_employee;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForEmployee TO rl_employee;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateProfile_ForEmployee TO rl_employee;
+GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_employee;
 
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForManager TO rl_manager;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForManager TO rl_manager;
+GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_manager;
 
 GRANT EXECUTE ON OBJECT::sp_HRRequest_Create TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_hrstaff;
@@ -1084,6 +1232,7 @@ GRANT EXECUTE ON OBJECT::sp_HRRequest_GetByIdByScope TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForHRStaff TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForHRStaff TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateProfile_ForHRStaff TO rl_hrstaff;
+GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_hrstaff;
 
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_GetByIdByScope TO rl_hrmanager;
@@ -1094,11 +1243,13 @@ GRANT EXECUTE ON OBJECT::sp_AuditLog_List TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForHRManager TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForHRManager TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateProfile_ForHRManager TO rl_hrmanager;
+GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_hrmanager;
 
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetList_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetByEmployeeId_ForFinance TO rl_finance;
+GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_finance;
 
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_GetByIdByScope TO rl_director;
@@ -1115,6 +1266,7 @@ GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetList_ForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetByEmployeeId_ForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Salary_Update_ForDirector TO rl_director;
+GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_director;
 GO
 
 /* =========================================================
