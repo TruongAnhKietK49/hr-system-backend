@@ -435,17 +435,13 @@ END
 GO
 
 CREATE OR ALTER PROCEDURE sp_Department_Create
-  @DepartmentID VARCHAR(10),
+  @DepartmentID VARCHAR(10) = NULL,
   @DepartmentName NVARCHAR(100),
   @ManagerID VARCHAR(10) = NULL
 AS
 BEGIN
   SET NOCOUNT ON;
-
-  IF EXISTS (SELECT 1 FROM Department WHERE DepartmentID = @DepartmentID)
-  BEGIN
-    THROW 50001, 'Department already exists.', 1;
-  END
+  SET XACT_ABORT ON;
 
   IF @ManagerID IS NOT NULL
     AND NOT EXISTS (
@@ -461,8 +457,26 @@ BEGIN
   BEGIN TRANSACTION;
 
   BEGIN TRY
+    DECLARE @NextDepartmentNumber INT;
+    DECLARE @GeneratedDepartmentID VARCHAR(10);
+
+    SELECT @NextDepartmentNumber =
+      ISNULL(MAX(TRY_CONVERT(INT, SUBSTRING(DepartmentID, 2, LEN(DepartmentID) - 1))), 0) + 1
+    FROM Department WITH (UPDLOCK, HOLDLOCK)
+    WHERE DepartmentID LIKE 'D[0-9]%'
+      AND DepartmentID NOT LIKE 'D%[^0-9]%';
+
+    SET @GeneratedDepartmentID = CONCAT(
+      'D',
+      CASE
+        WHEN @NextDepartmentNumber < 1000
+          THEN RIGHT('000' + CAST(@NextDepartmentNumber AS VARCHAR(10)), 3)
+        ELSE CAST(@NextDepartmentNumber AS VARCHAR(10))
+      END
+    );
+
     INSERT INTO Department (DepartmentID, DepartmentName, ManagerID)
-    VALUES (@DepartmentID, @DepartmentName, @ManagerID);
+    VALUES (@GeneratedDepartmentID, @DepartmentName, @ManagerID);
 
     EXEC sp_Department_SyncManagerAssignment
       @NewManagerID = @ManagerID,
@@ -482,7 +496,7 @@ BEGIN
     DepartmentName,
     ManagerID
   FROM Department
-  WHERE DepartmentID = @DepartmentID;
+  WHERE DepartmentID = @GeneratedDepartmentID;
 END
 GO
 
@@ -987,6 +1001,7 @@ BEGIN
   DECLARE @PositionID INT;
   DECLARE @Username VARCHAR(50);
   DECLARE @Role NVARCHAR(50);
+  DECLARE @EmployeeAuditValues NVARCHAR(MAX);
 
   SELECT @ApproverRole = Role
   FROM fn_RequesterContext(@ApproverID);
@@ -996,137 +1011,184 @@ BEGIN
     THROW 50015, 'Only Director can approve requests.', 1;
   END
 
-  IF NOT EXISTS (SELECT 1 FROM HR_Request WHERE RequestID = @RequestID AND Status = 'PENDING')
-  BEGIN
-    THROW 50016, 'Request not found or not pending.', 1;
-  END
-
-  SELECT @RequestPayload = RequestPayload
-  FROM HR_Request
-  WHERE RequestID = @RequestID;
-
-  SELECT
-    @FullName = JSON_VALUE(@RequestPayload, '$.fullName'),
-    @Gender = JSON_VALUE(@RequestPayload, '$.gender'),
-    @DateOfBirth = TRY_CAST(JSON_VALUE(@RequestPayload, '$.dateOfBirth') AS DATE),
-    @PhoneNumber = JSON_VALUE(@RequestPayload, '$.phoneNumber'),
-    @TaxID = JSON_VALUE(@RequestPayload, '$.taxId'),
-    @DepartmentID = JSON_VALUE(@RequestPayload, '$.departmentId'),
-    @PositionID = TRY_CAST(JSON_VALUE(@RequestPayload, '$.positionId') AS INT),
-    @Username = JSON_VALUE(@RequestPayload, '$.username'),
-    @Role = JSON_VALUE(@RequestPayload, '$.role');
-
-  IF @FullName IS NULL
-    OR @PhoneNumber IS NULL
-    OR @TaxID IS NULL
-    OR @DepartmentID IS NULL
-    OR @PositionID IS NULL
-    OR @Username IS NULL
-    OR @Role IS NULL
-  BEGIN
-    THROW 50017, 'Request payload is invalid.', 1;
-  END
-
-  IF NOT EXISTS (SELECT 1 FROM Department WHERE DepartmentID = @DepartmentID)
-  BEGIN
-    THROW 50018, 'Department not found.', 1;
-  END
-
-  IF NOT EXISTS (SELECT 1 FROM Position WHERE PositionID = @PositionID)
-  BEGIN
-    THROW 50019, 'Position not found.', 1;
-  END
-
-  IF EXISTS (SELECT 1 FROM Account WHERE Username = @Username)
-  BEGIN
-    THROW 50020, 'Username already exists.', 1;
-  END
-
   BEGIN TRANSACTION;
 
-  SELECT @NextID = ISNULL(MAX(CAST(SUBSTRING(EmployeeID, 3, 10) AS INT)), 0) + 1
-  FROM Employee
-  WHERE EmployeeID LIKE 'EM%';
+  BEGIN TRY
+    SELECT @RequestPayload = RequestPayload
+    FROM HR_Request WITH (UPDLOCK, HOLDLOCK)
+    WHERE RequestID = @RequestID
+      AND Status = 'PENDING'
+      AND RequestType = 'CREATE_EMPLOYEE';
 
-  SET @EmployeeID = 'EM' + RIGHT('00000' + CAST(@NextID AS VARCHAR(10)), 5);
+    IF @RequestPayload IS NULL
+    BEGIN
+      THROW 50016, 'Create employee request not found or not pending.', 1;
+    END
 
-  OPEN SYMMETRIC KEY HRSystemSymmetricKey
-  DECRYPTION BY CERTIFICATE HRSystemCertificate;
+    SELECT
+      @FullName = JSON_VALUE(@RequestPayload, '$.fullName'),
+      @Gender = JSON_VALUE(@RequestPayload, '$.gender'),
+      @DateOfBirth = TRY_CAST(JSON_VALUE(@RequestPayload, '$.dateOfBirth') AS DATE),
+      @PhoneNumber = JSON_VALUE(@RequestPayload, '$.phoneNumber'),
+      @TaxID = JSON_VALUE(@RequestPayload, '$.taxId'),
+      @DepartmentID = JSON_VALUE(@RequestPayload, '$.departmentId'),
+      @PositionID = TRY_CAST(JSON_VALUE(@RequestPayload, '$.positionId') AS INT),
+      @Username = JSON_VALUE(@RequestPayload, '$.username'),
+      @Role = JSON_VALUE(@RequestPayload, '$.role');
 
-  INSERT INTO Employee
-  (
-    EmployeeID,
-    FullName,
-    Gender,
-    DateOfBirth,
-    PhoneNumber,
-    TaxIDEncrypted,
-    DepartmentID,
-    PositionID,
-    EmploymentStatus,
-    IsActive,
-    CreatedAt
-  )
-  VALUES
-  (
-    @EmployeeID,
-    @FullName,
-    @Gender,
-    @DateOfBirth,
-    @PhoneNumber,
-    EncryptByKey(Key_GUID('HRSystemSymmetricKey'), @TaxID),
-    @DepartmentID,
-    @PositionID,
-    'ACTIVE',
-    1,
-    GETDATE()
-  );
+    IF @FullName IS NULL
+      OR @PhoneNumber IS NULL
+      OR @TaxID IS NULL
+      OR @DepartmentID IS NULL
+      OR @PositionID IS NULL
+      OR @Username IS NULL
+      OR @Role IS NULL
+    BEGIN
+      THROW 50017, 'Request payload is invalid.', 1;
+    END
 
-  CLOSE SYMMETRIC KEY HRSystemSymmetricKey;
+    IF NOT EXISTS (SELECT 1 FROM Department WHERE DepartmentID = @DepartmentID)
+    BEGIN
+      THROW 50018, 'Department not found.', 1;
+    END
 
-  INSERT INTO Account
-  (
-    EmployeeID,
-    Username,
-    PasswordHash,
-    PasswordSalt,
-    Role,
-    AccountStatus,
-    IsActive,
-    CreatedAt
-  )
-  VALUES
-  (
-    @EmployeeID,
-    @Username,
-    @PasswordHash,
-    @PasswordSalt,
-    @Role,
-    'ACTIVE',
-    1,
-    GETDATE()
-  );
+    IF NOT EXISTS (SELECT 1 FROM Position WHERE PositionID = @PositionID)
+    BEGIN
+      THROW 50019, 'Position not found.', 1;
+    END
 
-  EXEC sp_Salary_UpsertCore
-    @TargetEmployeeID = @EmployeeID,
-    @ActorEmployeeID = @ApproverID,
-    @BaseSalary = @BaseSalary,
-    @SalaryCoefficient = @SalaryCoefficient,
-    @PositionCoefficient = @PositionCoefficient,
-    @Allowance = @Allowance,
-    @FormulaVersion = @FormulaVersion,
-    @FinalSalary = @FinalSalary OUTPUT;
+    IF EXISTS (SELECT 1 FROM Account WITH (UPDLOCK, HOLDLOCK) WHERE Username = @Username)
+    BEGIN
+      THROW 50020, 'Username already exists.', 1;
+    END
 
-  UPDATE HR_Request
-  SET Status = 'APPROVED',
-      ApproverID = @ApproverID,
-      ApprovedAt = GETDATE(),
-      RejectionReason = NULL
-  WHERE RequestID = @RequestID;
+    SELECT @NextID =
+      ISNULL(MAX(TRY_CONVERT(INT, SUBSTRING(EmployeeID, 3, LEN(EmployeeID) - 2))), 0) + 1
+    FROM Employee WITH (UPDLOCK, HOLDLOCK)
+    WHERE EmployeeID LIKE 'EM[0-9]%'
+      AND EmployeeID NOT LIKE 'EM%[^0-9]%';
 
-  COMMIT TRANSACTION;
+    SET @EmployeeID = CONCAT(
+      'EM',
+      CASE
+        WHEN @NextID < 100000
+          THEN RIGHT('00000' + CAST(@NextID AS VARCHAR(10)), 5)
+        ELSE CAST(@NextID AS VARCHAR(10))
+      END
+    );
+
+    OPEN SYMMETRIC KEY HRSystemSymmetricKey
+    DECRYPTION BY CERTIFICATE HRSystemCertificate;
+
+    INSERT INTO Employee
+    (
+      EmployeeID,
+      FullName,
+      Gender,
+      DateOfBirth,
+      PhoneNumber,
+      TaxIDEncrypted,
+      DepartmentID,
+      PositionID,
+      EmploymentStatus,
+      IsActive,
+      CreatedAt
+    )
+    VALUES
+    (
+      @EmployeeID,
+      @FullName,
+      @Gender,
+      @DateOfBirth,
+      @PhoneNumber,
+      EncryptByKey(Key_GUID('HRSystemSymmetricKey'), @TaxID),
+      @DepartmentID,
+      @PositionID,
+      'ACTIVE',
+      1,
+      GETDATE()
+    );
+
+    CLOSE SYMMETRIC KEY HRSystemSymmetricKey;
+
+    INSERT INTO Account
+    (
+      EmployeeID,
+      Username,
+      PasswordHash,
+      PasswordSalt,
+      Role,
+      AccountStatus,
+      IsActive,
+      CreatedAt
+    )
+    VALUES
+    (
+      @EmployeeID,
+      @Username,
+      @PasswordHash,
+      @PasswordSalt,
+      @Role,
+      'ACTIVE',
+      1,
+      GETDATE()
+    );
+
+    EXEC sp_Salary_UpsertCore
+      @TargetEmployeeID = @EmployeeID,
+      @ActorEmployeeID = @ApproverID,
+      @BaseSalary = @BaseSalary,
+      @SalaryCoefficient = @SalaryCoefficient,
+      @PositionCoefficient = @PositionCoefficient,
+      @Allowance = @Allowance,
+      @FormulaVersion = @FormulaVersion,
+      @FinalSalary = @FinalSalary OUTPUT;
+
+    UPDATE HR_Request
+    SET Status = 'APPROVED',
+        ApproverID = @ApproverID,
+        ApprovedAt = GETDATE(),
+        RejectionReason = NULL
+    WHERE RequestID = @RequestID;
+
+    SET @EmployeeAuditValues =
+    (
+      SELECT
+        @EmployeeID AS EmployeeID,
+        @FullName AS FullName,
+        @Username AS Username,
+        @Role AS Role,
+        @DepartmentID AS DepartmentID,
+        @PositionID AS PositionID,
+        @FinalSalary AS FinalSalary
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+    );
+
+    EXEC sp_AuditLog_Create
+      @ActorID = @ApproverID,
+      @ActorRole = @ApproverRole,
+      @ActionType = N'CREATE_EMPLOYEE',
+      @TableName = N'Employee',
+      @RecordID = @EmployeeID,
+      @OldValues = NULL,
+      @NewValues = @EmployeeAuditValues;
+
+    COMMIT TRANSACTION;
+  END TRY
+  BEGIN CATCH
+    IF EXISTS (SELECT 1 FROM sys.openkeys WHERE key_name = 'HRSystemSymmetricKey')
+    BEGIN
+      CLOSE SYMMETRIC KEY HRSystemSymmetricKey;
+    END
+
+    IF @@TRANCOUNT > 0
+      ROLLBACK TRANSACTION;
+
+    THROW;
+  END CATCH
 
   SELECT
+    @RequestID AS RequestID,
     @EmployeeID AS EmployeeID,
     @Username AS Username,
     @Role AS Role,
@@ -1134,6 +1196,7 @@ BEGIN
     @FinalSalary AS FinalSalary;
 END
 GO
+
 
 CREATE OR ALTER PROCEDURE sp_Approval_ApproveUpdateEmployee
   @RequestID INT,
