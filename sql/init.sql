@@ -31,6 +31,7 @@ GO
 DROP PROCEDURE IF EXISTS sp_Employee_ListByScope;
 DROP PROCEDURE IF EXISTS sp_Employee_GetByIdScoped;
 DROP PROCEDURE IF EXISTS sp_Employee_UpdateProfile;
+DROP PROCEDURE IF EXISTS sp_Department_SyncManagerAssignment;
 DROP PROCEDURE IF EXISTS sp_Finance_GetPayroll;
 DROP PROCEDURE IF EXISTS sp_Finance_GetPayrollByEmployeeId;
 DROP PROCEDURE IF EXISTS sp_Approval_ListPending;
@@ -365,6 +366,74 @@ BEGIN
 END
 GO
 
+CREATE OR ALTER PROCEDURE sp_Department_SyncManagerAssignment
+  @NewManagerID VARCHAR(10) = NULL,
+  @OldManagerID VARCHAR(10) = NULL
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  DECLARE @StaffPositionID INT;
+  DECLARE @ManagerPositionID INT;
+
+  SELECT @StaffPositionID = PositionID
+  FROM Position
+  WHERE PositionName = N'Staff';
+
+  SELECT @ManagerPositionID = PositionID
+  FROM Position
+  WHERE PositionName = N'Manager';
+
+  IF @StaffPositionID IS NULL OR @ManagerPositionID IS NULL
+  BEGIN
+    THROW 50005, 'Base positions Staff/Manager are not configured.', 1;
+  END
+
+  -- Người mới được bổ nhiệm làm trưởng ít nhất một phòng:
+  -- chỉ nâng chức vụ Staff -> Manager, không đụng Director/chức vụ đặc biệt.
+  IF @NewManagerID IS NOT NULL
+  BEGIN
+    UPDATE Employee
+    SET PositionID = @ManagerPositionID
+    WHERE EmployeeID = @NewManagerID
+      AND IsActive = 1
+      AND PositionID = @StaffPositionID;
+
+    -- Chỉ nâng quyền account thường. Không ghi đè HR Staff/HR Manager/Finance Staff/Director.
+    UPDATE Account
+    SET Role = 'Manager'
+    WHERE EmployeeID = @NewManagerID
+      AND Role = 'Employee'
+      AND IsActive = 1
+      AND AccountStatus = 'ACTIVE';
+  END
+
+  -- Người cũ bị gỡ khỏi phòng hiện tại:
+  -- chỉ hạ nếu họ không còn quản lý bất kỳ phòng ban nào khác.
+  IF @OldManagerID IS NOT NULL
+    AND (@NewManagerID IS NULL OR @OldManagerID <> @NewManagerID)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM Department
+      WHERE ManagerID = @OldManagerID
+    )
+  BEGIN
+    UPDATE Employee
+    SET PositionID = @StaffPositionID
+    WHERE EmployeeID = @OldManagerID
+      AND IsActive = 1
+      AND PositionID = @ManagerPositionID;
+
+    UPDATE Account
+    SET Role = 'Employee'
+    WHERE EmployeeID = @OldManagerID
+      AND Role = 'Manager'
+      AND IsActive = 1
+      AND AccountStatus = 'ACTIVE';
+  END
+END
+GO
+
 CREATE OR ALTER PROCEDURE sp_Department_Create
   @DepartmentID VARCHAR(10),
   @DepartmentName NVARCHAR(100),
@@ -379,13 +448,34 @@ BEGIN
   END
 
   IF @ManagerID IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM Employee WHERE EmployeeID = @ManagerID AND IsActive = 1)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM Employee
+      WHERE EmployeeID = @ManagerID
+        AND IsActive = 1
+    )
   BEGIN
-    THROW 50002, 'Manager not found or inactive.', 1;
+    THROW 50002, 'Manager candidate not found or inactive.', 1;
   END
 
-  INSERT INTO Department (DepartmentID, DepartmentName, ManagerID)
-  VALUES (@DepartmentID, @DepartmentName, @ManagerID);
+  BEGIN TRANSACTION;
+
+  BEGIN TRY
+    INSERT INTO Department (DepartmentID, DepartmentName, ManagerID)
+    VALUES (@DepartmentID, @DepartmentName, @ManagerID);
+
+    EXEC sp_Department_SyncManagerAssignment
+      @NewManagerID = @ManagerID,
+      @OldManagerID = NULL;
+
+    COMMIT TRANSACTION;
+  END TRY
+  BEGIN CATCH
+    IF @@TRANCOUNT > 0
+      ROLLBACK TRANSACTION;
+
+    THROW;
+  END CATCH
 
   SELECT
     DepartmentID,
@@ -404,6 +494,8 @@ AS
 BEGIN
   SET NOCOUNT ON;
 
+  DECLARE @OldManagerID VARCHAR(10);
+
   IF NOT EXISTS (SELECT 1 FROM Department WHERE DepartmentID = @DepartmentID)
   BEGIN
     SELECT TOP 0 DepartmentID, DepartmentName, ManagerID
@@ -411,16 +503,41 @@ BEGIN
     RETURN;
   END
 
+  SELECT @OldManagerID = ManagerID
+  FROM Department
+  WHERE DepartmentID = @DepartmentID;
+
   IF @ManagerID IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM Employee WHERE EmployeeID = @ManagerID AND IsActive = 1)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM Employee
+      WHERE EmployeeID = @ManagerID
+        AND IsActive = 1
+    )
   BEGIN
-    THROW 50003, 'Manager not found or inactive.', 1;
+    THROW 50003, 'Manager candidate not found or inactive.', 1;
   END
 
-  UPDATE Department
-  SET DepartmentName = COALESCE(@DepartmentName, DepartmentName),
-      ManagerID = @ManagerID
-  WHERE DepartmentID = @DepartmentID;
+  BEGIN TRANSACTION;
+
+  BEGIN TRY
+    UPDATE Department
+    SET DepartmentName = COALESCE(@DepartmentName, DepartmentName),
+        ManagerID = @ManagerID
+    WHERE DepartmentID = @DepartmentID;
+
+    EXEC sp_Department_SyncManagerAssignment
+      @NewManagerID = @ManagerID,
+      @OldManagerID = @OldManagerID;
+
+    COMMIT TRANSACTION;
+  END TRY
+  BEGIN CATCH
+    IF @@TRANCOUNT > 0
+      ROLLBACK TRANSACTION;
+
+    THROW;
+  END CATCH
 
   SELECT
     DepartmentID,
@@ -437,13 +554,40 @@ AS
 BEGIN
   SET NOCOUNT ON;
 
-  IF EXISTS (SELECT 1 FROM Employee WHERE DepartmentID = @DepartmentID AND IsActive = 1)
+  DECLARE @OldManagerID VARCHAR(10);
+
+  IF EXISTS (
+    SELECT 1
+    FROM Employee
+    WHERE DepartmentID = @DepartmentID
+      AND IsActive = 1
+  )
   BEGIN
     THROW 50004, 'Cannot delete department with active employees.', 1;
   END
 
-  DELETE FROM Department
+  SELECT @OldManagerID = ManagerID
+  FROM Department
   WHERE DepartmentID = @DepartmentID;
+
+  BEGIN TRANSACTION;
+
+  BEGIN TRY
+    DELETE FROM Department
+    WHERE DepartmentID = @DepartmentID;
+
+    EXEC sp_Department_SyncManagerAssignment
+      @NewManagerID = NULL,
+      @OldManagerID = @OldManagerID;
+
+    COMMIT TRANSACTION;
+  END TRY
+  BEGIN CATCH
+    IF @@TRANCOUNT > 0
+      ROLLBACK TRANSACTION;
+
+    THROW;
+  END CATCH
 END
 GO
 
@@ -535,6 +679,58 @@ BEGIN
   END
 
   CLOSE SYMMETRIC KEY HRSystemSymmetricKey;
+END
+GO
+
+CREATE OR ALTER PROCEDURE sp_Department_SearchManagerCandidates
+  @Keyword NVARCHAR(100) = NULL,
+  @Limit INT = 20
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  DECLARE @SafeLimit INT = CASE
+    WHEN @Limit IS NULL OR @Limit < 1 THEN 20
+    WHEN @Limit > 50 THEN 50
+    ELSE @Limit
+  END;
+
+  DECLARE @NormalizedKeyword NVARCHAR(100) = NULLIF(LTRIM(RTRIM(@Keyword)), N'');
+
+  SELECT TOP (@SafeLimit)
+    e.EmployeeID,
+    e.FullName,
+    e.DepartmentID,
+    d.DepartmentName,
+    e.PositionID,
+    p.PositionName,
+    e.IsActive,
+    CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM Department managedDepartment
+        WHERE managedDepartment.ManagerID = e.EmployeeID
+      ) THEN CAST(1 AS BIT)
+      ELSE CAST(0 AS BIT)
+    END AS IsManagingDepartment
+  FROM Employee e
+  INNER JOIN Department d ON d.DepartmentID = e.DepartmentID
+  INNER JOIN Position p ON p.PositionID = e.PositionID
+  WHERE e.IsActive = 1
+    AND (
+      @NormalizedKeyword IS NULL
+      OR e.EmployeeID LIKE '%' + @NormalizedKeyword + '%'
+      OR e.FullName LIKE N'%' + @NormalizedKeyword + N'%'
+      OR d.DepartmentName LIKE N'%' + @NormalizedKeyword + N'%'
+    )
+  ORDER BY
+    CASE
+      WHEN @NormalizedKeyword IS NOT NULL AND e.EmployeeID = @NormalizedKeyword THEN 0
+      WHEN @NormalizedKeyword IS NOT NULL AND e.FullName LIKE @NormalizedKeyword + N'%' THEN 1
+      ELSE 2
+    END,
+    e.FullName ASC,
+    e.EmployeeID ASC;
 END
 GO
 

@@ -554,6 +554,34 @@ END;
 GO
 
 /* =========================================================
+   Post-seed Department Manager Consistency
+   - keep PositionID/Account.Role aligned with Department.ManagerID
+   - special account roles are preserved by sp_Department_SyncManagerAssignment
+   ========================================================= */
+DECLARE @SeedManagerID VARCHAR(10);
+
+DECLARE seed_manager_cursor CURSOR LOCAL FAST_FORWARD FOR
+SELECT DISTINCT ManagerID
+FROM Department
+WHERE ManagerID IS NOT NULL;
+
+OPEN seed_manager_cursor;
+FETCH NEXT FROM seed_manager_cursor INTO @SeedManagerID;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+  EXEC sp_Department_SyncManagerAssignment
+    @NewManagerID = @SeedManagerID,
+    @OldManagerID = NULL;
+
+  FETCH NEXT FROM seed_manager_cursor INTO @SeedManagerID;
+END;
+
+CLOSE seed_manager_cursor;
+DEALLOCATE seed_manager_cursor;
+GO
+
+/* =========================================================
    HR Request Seed
    ========================================================= */
 IF NOT EXISTS (SELECT 1 FROM HR_Request WHERE RequestID = 1)

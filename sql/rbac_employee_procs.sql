@@ -1201,6 +1201,8 @@ GO
    ========================================================= */
 GRANT EXECUTE ON OBJECT::sp_Auth_GetAccountByUsername TO PUBLIC;
 GRANT EXECUTE ON OBJECT::sp_Department_List TO PUBLIC;
+GRANT EXECUTE ON OBJECT::sp_Department_SearchManagerCandidates TO rl_hrmanager;
+GRANT EXECUTE ON OBJECT::sp_Department_SearchManagerCandidates TO rl_director;
 
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForEmployee TO rl_employee;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForEmployee TO rl_employee;
@@ -1226,6 +1228,7 @@ GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_GetByIdByScope TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Department_Create TO rl_hrmanager;
+GRANT EXECUTE ON OBJECT::sp_Department_SyncManagerAssignment TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Department_Update TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Department_Delete TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_AuditLog_List TO rl_hrmanager;
@@ -1250,6 +1253,7 @@ GRANT EXECUTE ON OBJECT::sp_Approval_GetRequestForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Approval_ApproveCreateEmployee TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Approval_RejectRequest TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Department_Create TO rl_director;
+GRANT EXECUTE ON OBJECT::sp_Department_SyncManagerAssignment TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Department_Update TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Department_Delete TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_AuditLog_List TO rl_director;
