@@ -13,7 +13,7 @@ class DepartmentRepository {
     const pool = await getPool();
     const request = pool.request();
 
-    addInput(request, "DepartmentID", SqlTypes.VarChar, payload.departmentId);
+    addInput(request, "DepartmentID", SqlTypes.VarChar, null);
     addInput(
       request,
       "DepartmentName",

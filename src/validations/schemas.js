@@ -26,7 +26,7 @@ export const refreshSchema = Joi.object({
 });
 
 export const departmentCreateSchema = Joi.object({
-  departmentId: Joi.string().required(),
+  departmentId: Joi.string().allow(null, ""),
   departmentName: Joi.string().trim().required(),
   managerId: Joi.string().allow(null, ""),
 });
@@ -46,6 +46,7 @@ export const hrRequestCreateSchema = Joi.object({
       {
         is: "CREATE_EMPLOYEE",
         then: Joi.object({
+          employeeId: Joi.string().allow(null, ""),
           fullName: Joi.string().trim().required(),
           gender: Joi.string().allow("", null),
           dateOfBirth: Joi.date().required(),

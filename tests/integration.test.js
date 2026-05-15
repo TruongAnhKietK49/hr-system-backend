@@ -194,12 +194,12 @@ registerTest('salary list and salary detail endpoints enforce role-specific fiel
   assert.equal(financeList.body.data.length, 6);
   const financeMasked = getByEmployeeId(financeList.body.data, 'EM00005');
   assert.equal(financeMasked.FullName, null);
-  assert.equal('BaseSalary' in financeMasked, false);
+  assert.equal(financeMasked.BaseSalary, null);
 
   const financeDetail = await authorizedRequest('finance01', '/api/salaries/EM00005');
   assert.equal(financeDetail.status, 200);
   assert.equal(financeDetail.body.data.FullName, null);
-  assert.equal('BaseSalary' in financeDetail.body.data, false);
+  assert.equal(financeDetail.body.data.BaseSalary, null);
 
   const directorDetail = await authorizedRequest('director01', '/api/salaries/EM00006');
   assert.equal(directorDetail.status, 200);
@@ -211,7 +211,7 @@ registerTest('finance payroll endpoints are backward-compatible aliases for sala
   const listResponse = await authorizedRequest('finance01', '/api/finance/payroll');
   assert.equal(listResponse.status, 200);
   assert.equal(listResponse.body.data.length, 6);
-  assert.equal('BaseSalary' in getByEmployeeId(listResponse.body.data, 'EM00005'), false);
+  assert.equal(getByEmployeeId(listResponse.body.data, 'EM00005').BaseSalary, null);
 
   const detailResponse = await authorizedRequest('director01', '/api/finance/payroll/EM00006');
   assert.equal(detailResponse.status, 200);
@@ -321,6 +321,153 @@ registerTest('director pending approvals endpoint still works after SQL sync', a
   const response = await authorizedRequest('director01', '/api/approvals/pending');
   assert.equal(response.status, 200);
   assert.equal(response.body.data.some((row) => row.Status === 'PENDING'), true);
+});
+
+registerTest('department creation uses backend-generated DepartmentID and ignores legacy input', async () => {
+  const createWithoutId = await authorizedRequest('hrmanager01', '/api/departments', {
+    method: 'POST',
+    body: JSON.stringify({
+      departmentName: 'Product'
+    })
+  });
+
+  assert.equal(createWithoutId.status, 201);
+  assert.equal(createWithoutId.body.data.DepartmentID, 'D005');
+
+  await pool.request().batch(`
+    INSERT INTO Department (DepartmentID, DepartmentName)
+    VALUES ('D010', N'Legacy Gap Department');
+
+    INSERT INTO Department (DepartmentID, DepartmentName)
+    VALUES ('ABC', N'Invalid Code Department');
+
+    INSERT INTO Department (DepartmentID, DepartmentName)
+    VALUES ('DEP02', N'Legacy Text Code Department');
+  `);
+
+  const createWithLegacyId = await authorizedRequest('director01', '/api/departments', {
+    method: 'POST',
+    body: JSON.stringify({
+      departmentId: 'D999',
+      departmentName: 'Platform'
+    })
+  });
+
+  assert.equal(createWithLegacyId.status, 201);
+  assert.equal(createWithLegacyId.body.data.DepartmentID, 'D011');
+
+  const createNext = await authorizedRequest('director01', '/api/departments', {
+    method: 'POST',
+    body: JSON.stringify({
+      departmentName: 'Customer Success'
+    })
+  });
+
+  assert.equal(createNext.status, 201);
+  assert.equal(createNext.body.data.DepartmentID, 'D012');
+
+  const departments = await authorizedRequest('director01', '/api/departments');
+  assert.equal(departments.status, 200);
+  assert.equal(
+    departments.body.data.filter((department) =>
+      ['D005', 'D011', 'D012'].includes(department.DepartmentID)
+    ).length,
+    3
+  );
+});
+
+registerTest('CREATE_EMPLOYEE request does not require EmployeeID and approval generates official EmployeeID', async () => {
+  const createRequest = await authorizedRequest('hrstaff01', '/api/hr-requests', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestType: 'CREATE_EMPLOYEE',
+      payload: {
+        fullName: 'Generated Employee User',
+        gender: 'Female',
+        dateOfBirth: '2001-02-03',
+        phoneNumber: '0901777777',
+        taxId: '777777001',
+        departmentId: 'D003',
+        positionId: 1,
+        username: 'generatedemp01',
+        password: '123456',
+        role: 'Employee'
+      }
+    })
+  });
+
+  assert.equal(createRequest.status, 201);
+  assert.ok(createRequest.body.data.RequestID);
+
+  const approveResponse = await authorizedRequest(
+    'director01',
+    `/api/approvals/${createRequest.body.data.RequestID}/approve`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        baseSalary: 12000000,
+        salaryCoefficient: 1.2,
+        positionCoefficient: 1,
+        allowance: 1000000,
+        formulaVersion: 'v1'
+      })
+    }
+  );
+
+  assert.equal(approveResponse.status, 200);
+  assert.equal(approveResponse.body.data.EmployeeID, 'EM00007');
+
+  const employee = await authorizedRequest('director01', '/api/employees/EM00007');
+  assert.equal(employee.status, 200);
+  assert.equal(employee.body.data.FullName, 'Generated Employee User');
+
+  const salary = await authorizedRequest('director01', '/api/salaries/EM00007');
+  assert.equal(salary.status, 200);
+  assert.equal(salary.body.data.FinalSalary, '15400000.00');
+
+  const account = await pool
+    .request()
+    .input('Username', sql.VarChar, 'generatedemp01')
+    .query('SELECT EmployeeID, Username, Role FROM Account WHERE Username = @Username');
+
+  assert.equal(account.recordset[0].EmployeeID, 'EM00007');
+  assert.equal(account.recordset[0].Role, 'Employee');
+
+  const hrRequest = await pool
+    .request()
+    .input('RequestID', sql.Int, createRequest.body.data.RequestID)
+    .query('SELECT Status, ApproverID FROM HR_Request WHERE RequestID = @RequestID');
+
+  assert.equal(hrRequest.recordset[0].Status, 'APPROVED');
+  assert.equal(hrRequest.recordset[0].ApproverID, 'EM00001');
+
+  const audit = await pool
+    .request()
+    .input('RequestID', sql.VarChar, String(createRequest.body.data.RequestID))
+    .query(`
+      SELECT ActionType, TableName, RecordID, NewValues
+      FROM Audit_Log
+      WHERE ActionType = 'APPROVE_HR_REQUEST'
+        AND TableName = 'HR_Request'
+        AND RecordID = @RequestID
+    `);
+
+  assert.equal(audit.recordset.length, 1);
+  assert.match(audit.recordset[0].NewValues, /EM00007/);
+
+  const employeeAudit = await pool
+    .request()
+    .input('EmployeeID', sql.VarChar, 'EM00007')
+    .query(`
+      SELECT ActionType, TableName, RecordID, NewValues
+      FROM Audit_Log
+      WHERE ActionType = 'CREATE_EMPLOYEE'
+        AND TableName = 'Employee'
+        AND RecordID = @EmployeeID
+    `);
+
+  assert.equal(employeeAudit.recordset.length, 1);
+  assert.match(employeeAudit.recordset[0].NewValues, /Generated Employee User/);
 });
 
 const run = async () => {

@@ -1,4 +1,4 @@
-import { getPool, sql } from "../../config/database.js";
+import { getPool } from "../../config/database.js";
 import { addInput, SqlTypes } from "../../utils/procedure.js";
 
 class ApprovalRepository {
@@ -25,56 +25,46 @@ class ApprovalRepository {
 
   async approveCreateEmployee(payload) {
     const pool = await getPool();
-    const transaction = new sql.Transaction(pool);
+    const request = pool.request();
 
-    await transaction.begin();
+    addInput(request, "RequestID", SqlTypes.Int, payload.requestId);
+    addInput(request, "ApproverID", SqlTypes.VarChar, payload.approverId);
+    addInput(request, "BaseSalary", SqlTypes.Decimal18_2, payload.baseSalary);
+    addInput(
+      request,
+      "SalaryCoefficient",
+      SqlTypes.Decimal10_2,
+      payload.salaryCoefficient,
+    );
+    addInput(
+      request,
+      "PositionCoefficient",
+      SqlTypes.Decimal10_2,
+      payload.positionCoefficient,
+    );
+    addInput(request, "Allowance", SqlTypes.Decimal18_2, payload.allowance);
+    addInput(
+      request,
+      "FormulaVersion",
+      SqlTypes.NVarChar,
+      payload.formulaVersion,
+    );
+    addInput(
+      request,
+      "PasswordHash",
+      SqlTypes.MaxNVarChar,
+      payload.passwordHash,
+    );
+    addInput(
+      request,
+      "PasswordSalt",
+      SqlTypes.MaxNVarChar,
+      payload.passwordSalt,
+    );
 
-    try {
-      const request = new sql.Request(transaction);
+    const result = await request.execute("sp_Approval_ApproveCreateEmployee");
 
-      addInput(request, "RequestID", SqlTypes.Int, payload.requestId);
-      addInput(request, "ApproverID", SqlTypes.VarChar, payload.approverId);
-      addInput(request, "BaseSalary", SqlTypes.Decimal18_2, payload.baseSalary);
-      addInput(
-        request,
-        "SalaryCoefficient",
-        SqlTypes.Decimal10_2,
-        payload.salaryCoefficient,
-      );
-      addInput(
-        request,
-        "PositionCoefficient",
-        SqlTypes.Decimal10_2,
-        payload.positionCoefficient,
-      );
-      addInput(request, "Allowance", SqlTypes.Decimal18_2, payload.allowance);
-      addInput(
-        request,
-        "FormulaVersion",
-        SqlTypes.NVarChar,
-        payload.formulaVersion,
-      );
-      addInput(
-        request,
-        "PasswordHash",
-        SqlTypes.MaxNVarChar,
-        payload.passwordHash,
-      );
-      addInput(
-        request,
-        "PasswordSalt",
-        SqlTypes.MaxNVarChar,
-        payload.passwordSalt,
-      );
-
-      const result = await request.execute("sp_Approval_ApproveCreateEmployee");
-
-      await transaction.commit();
-      return result.recordset[0] || null;
-    } catch (error) {
-      await transaction.rollback();
-      throw error;
-    }
+    return result.recordset[0] || null;
   }
 
   async approveUpdateEmployee(payload) {
