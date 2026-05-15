@@ -554,9 +554,9 @@ BEGIN
   SELECT @RequesterRole = Role
   FROM fn_RequesterContext(@RequesterID);
 
-  IF @RequesterRole <> 'HR Staff'
+  IF @RequesterRole NOT IN ('HR Staff', 'HR Manager')
   BEGIN
-    THROW 50007, 'Only HR Staff can create HR requests.', 1;
+    THROW 52001, 'Only HR Staff or HR Manager can create HR requests.', 1;
   END
 
   IF @RequestType NOT IN ('CREATE_EMPLOYEE', 'UPDATE_EMPLOYEE', 'DELETE_EMPLOYEE')
