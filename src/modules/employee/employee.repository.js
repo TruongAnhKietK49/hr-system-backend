@@ -43,6 +43,23 @@ class EmployeeRepository {
     return result.recordset[0] || null;
   }
 
+  async getOwnProfile(requesterEmployeeId, targetEmployeeId) {
+    const pool = await getPool();
+    const request = pool.request();
+
+    addInput(
+      request,
+      "RequesterEmployeeID",
+      SqlTypes.VarChar,
+      requesterEmployeeId,
+    );
+
+    addInput(request, "TargetEmployeeID", SqlTypes.VarChar, targetEmployeeId);
+
+    const result = await request.execute("sp_Employee_GetOwnProfile");
+    return result.recordset[0] || null;
+  }
+
   async updateByRole(payload) {
     const pool = await getPool();
     const request = pool.request();

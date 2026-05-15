@@ -638,6 +638,37 @@ BEGIN
 END
 GO
 
+CREATE OR ALTER PROCEDURE sp_Employee_GetOwnProfile
+  @RequesterEmployeeID VARCHAR(10),
+  @TargetEmployeeID VARCHAR(10)
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  IF @RequesterEmployeeID <> @TargetEmployeeID
+  BEGIN
+    THROW 51026, 'User can view only own profile.', 1;
+  END
+
+  SELECT
+    e.EmployeeID,
+    e.FullName,
+    e.Gender,
+    e.DateOfBirth,
+    e.PhoneNumber,
+    e.DepartmentID,
+    d.DepartmentName,
+    e.PositionID,
+    e.EmploymentStatus,
+    e.IsActive,
+    e.CreatedAt
+  FROM Employee e
+  LEFT JOIN Department d ON d.DepartmentID = e.DepartmentID
+  WHERE e.EmployeeID = @TargetEmployeeID
+    AND e.IsActive = 1;
+END
+GO
+
 /* =========================================================
    Employee Update Procedures
    ========================================================= */
@@ -816,53 +847,7 @@ BEGIN
   WHERE EmployeeID = @TargetEmployeeID
     AND IsActive = 1;
 
-  -- Trả về thông tin theo chính role hiện tại
-  DECLARE @RequesterRole NVARCHAR(50);
-
-  SELECT @RequesterRole = Role
-  FROM fn_RequesterContext(@RequesterEmployeeID);
-
-  IF @RequesterRole = 'Director'
-  BEGIN
-    EXEC sp_Employee_GetById_ForDirector
-      @RequesterEmployeeID = @RequesterEmployeeID,
-      @TargetEmployeeID = @TargetEmployeeID;
-    RETURN;
-  END
-
-  IF @RequesterRole = 'Finance Staff'
-  BEGIN
-    EXEC sp_Employee_GetById_ForFinance
-      @RequesterEmployeeID = @RequesterEmployeeID,
-      @TargetEmployeeID = @TargetEmployeeID;
-    RETURN;
-  END
-
-  IF @RequesterRole = 'Manager'
-  BEGIN
-    EXEC sp_Employee_GetById_ForManager
-      @RequesterEmployeeID = @RequesterEmployeeID,
-      @TargetEmployeeID = @TargetEmployeeID;
-    RETURN;
-  END
-
-  IF @RequesterRole = 'HR Manager'
-  BEGIN
-    EXEC sp_Employee_GetById_ForHRManager
-      @RequesterEmployeeID = @RequesterEmployeeID,
-      @TargetEmployeeID = @TargetEmployeeID;
-    RETURN;
-  END
-
-  IF @RequesterRole = 'HR Staff'
-  BEGIN
-    EXEC sp_Employee_GetById_ForHRStaff
-      @RequesterEmployeeID = @RequesterEmployeeID,
-      @TargetEmployeeID = @TargetEmployeeID;
-    RETURN;
-  END
-
-  EXEC sp_Employee_GetById_ForEmployee
+  EXEC sp_Employee_GetOwnProfile
     @RequesterEmployeeID = @RequesterEmployeeID,
     @TargetEmployeeID = @TargetEmployeeID;
 END
@@ -1221,10 +1206,13 @@ GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForEmployee TO rl_employee;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForEmployee TO rl_employee;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateProfile_ForEmployee TO rl_employee;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_employee;
+GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_employee;
 
+GRANT EXECUTE ON OBJECT::sp_HRRequest_Create TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForManager TO rl_manager;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForManager TO rl_manager;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_manager;
+GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_manager;
 
 GRANT EXECUTE ON OBJECT::sp_HRRequest_Create TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_hrstaff;
@@ -1233,6 +1221,7 @@ GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForHRStaff TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForHRStaff TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateProfile_ForHRStaff TO rl_hrstaff;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_hrstaff;
+GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_hrstaff;
 
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_GetByIdByScope TO rl_hrmanager;
@@ -1244,12 +1233,15 @@ GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForHRManager TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForHRManager TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateProfile_ForHRManager TO rl_hrmanager;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_hrmanager;
+GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_hrmanager;
+
 
 GRANT EXECUTE ON OBJECT::sp_Employee_GetList_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Employee_GetById_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetList_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetByEmployeeId_ForFinance TO rl_finance;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_finance;
+GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_finance;
 
 GRANT EXECUTE ON OBJECT::sp_HRRequest_ListByScope TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_HRRequest_GetByIdByScope TO rl_director;
@@ -1267,6 +1259,7 @@ GRANT EXECUTE ON OBJECT::sp_Salary_GetList_ForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Salary_GetByEmployeeId_ForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Salary_Update_ForDirector TO rl_director;
 GRANT EXECUTE ON OBJECT::sp_Employee_UpdateOwnProfile TO rl_director;
+GRANT EXECUTE ON OBJECT::sp_Employee_GetOwnProfile TO rl_director;
 GO
 
 /* =========================================================
