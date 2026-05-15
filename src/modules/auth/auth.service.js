@@ -1,7 +1,7 @@
 import { StatusCodes } from "http-status-codes";
 import { authRepository } from "./auth.repository.js";
 import { auditRepository } from "../audit/audit.repository.js";
-import { verifyPassword } from "../../utils/password.js";
+import { verifyPassword, generateHashAndSalt } from "../../utils/password.js";
 import {
   signAccessToken,
   signRefreshToken,
@@ -103,6 +103,74 @@ class AuthService {
     } catch {
       throw new AppError("Invalid refresh token", StatusCodes.UNAUTHORIZED);
     }
+  }
+
+  async changePassword({
+    employeeId,
+    username,
+    role,
+    currentPassword,
+    newPassword,
+  }) {
+    const account = await authRepository.findAccountByUsername(username);
+
+    if (!account || !account.IsActive || account.AccountStatus !== "ACTIVE") {
+      throw new AppError(
+        "Account not found or inactive",
+        StatusCodes.UNAUTHORIZED,
+      );
+    }
+
+    if (account.EmployeeID !== employeeId) {
+      throw new AppError("Unauthorized", StatusCodes.UNAUTHORIZED);
+    }
+
+    const matched = await verifyPassword(currentPassword, account.PasswordHash);
+
+    if (!matched) {
+      throw new AppError(
+        "Current password is incorrect",
+        StatusCodes.BAD_REQUEST,
+      );
+    }
+
+    const isSamePassword = await verifyPassword(
+      newPassword,
+      account.PasswordHash,
+    );
+
+    if (isSamePassword) {
+      throw new AppError(
+        "New password must be different from current password",
+        StatusCodes.BAD_REQUEST,
+      );
+    }
+
+    const { hash, salt } = await generateHashAndSalt(newPassword);
+
+    await authRepository.updatePasswordByEmployeeId({
+      employeeId,
+      passwordHash: hash,
+      passwordSalt: salt,
+    });
+
+    await auditRepository.createLog({
+      actorId: employeeId,
+      actorRole: role,
+      actionType: ACTION_TYPES.CHANGE_PASSWORD,
+      tableName: "Account",
+      recordId: employeeId,
+      oldValues: null,
+      newValues: JSON.stringify({
+        username,
+        changedAt: new Date().toISOString(),
+      }),
+    });
+
+    return {
+      employeeId,
+      username,
+    };
   }
 }
 

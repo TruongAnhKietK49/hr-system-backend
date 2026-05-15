@@ -25,6 +25,11 @@ export const refreshSchema = Joi.object({
   refreshToken: Joi.string().required(),
 });
 
+export const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string().min(6).required(),
+  newPassword: Joi.string().min(6).required(),
+});
+
 export const departmentCreateSchema = Joi.object({
   departmentId: Joi.string().allow(null, ""),
   departmentName: Joi.string().trim().required(),
