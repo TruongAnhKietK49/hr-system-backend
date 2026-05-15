@@ -21,17 +21,32 @@ class EmployeeService {
   }
 
   async getById(user, employeeId) {
-    const data = await employeeRepository.findByIdScoped({
+    const isOwnProfile = user.employeeId === employeeId;
+
+    if (isOwnProfile) {
+      const record = await employeeRepository.getOwnProfile(
+        user.employeeId,
+        employeeId,
+      );
+
+      if (!record) {
+        throw new AppError("Employee not found", 404);
+      }
+
+      return record;
+    }
+
+    const record = await employeeRepository.findByIdScoped({
       role: user.role,
       requesterEmployeeId: user.employeeId,
       targetEmployeeId: employeeId,
     });
 
-    if (!data) {
-      throw new AppError("Employee not found or access denied", 404);
+    if (!record) {
+      throw new AppError("Employee not found", 404);
     }
 
-    return presentEmployeeRecord(user.role, data);
+    return presentEmployeeRecord(user.role, record);
   }
 
   async update(user, employeeId, payload) {
