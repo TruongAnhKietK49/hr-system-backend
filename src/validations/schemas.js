@@ -31,14 +31,13 @@ export const changePasswordSchema = Joi.object({
 });
 
 export const departmentCreateSchema = Joi.object({
-  departmentId: Joi.string().allow(null, ""),
   departmentName: Joi.string().trim().required(),
-  managerId: Joi.string().allow(null, ""),
+  managerEmployeeId: Joi.string().trim().allow(null, "").optional(),
 });
 
 export const departmentUpdateSchema = Joi.object({
   departmentName: Joi.string().trim(),
-  managerId: Joi.string().allow(null, ""),
+  managerEmployeeId: Joi.string().trim().allow(null, "").optional(),
 }).min(1);
 
 export const hrRequestCreateSchema = Joi.object({
