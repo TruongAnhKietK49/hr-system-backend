@@ -20,7 +20,7 @@ class DepartmentRepository {
       SqlTypes.NVarChar,
       payload.departmentName,
     );
-    addInput(request, "ManagerID", SqlTypes.VarChar, payload.managerId);
+    addInput(request, "ManagerID", SqlTypes.VarChar, payload.managerEmployeeId || null);
 
     const result = await request.execute("sp_Department_Create");
 
@@ -38,7 +38,7 @@ class DepartmentRepository {
       SqlTypes.NVarChar,
       payload.departmentName,
     );
-    addInput(request, "ManagerID", SqlTypes.VarChar, payload.managerId);
+    addInput(request, "ManagerID", SqlTypes.VarChar, payload.managerEmployeeId || null);
 
     const result = await request.execute("sp_Department_Update");
 
